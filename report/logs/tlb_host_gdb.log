@@ -1,0 +1,58 @@
+Breakpoint 1 at 0x793aa2: file ../target/riscv/cpu_helper.c, line 1226.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+[New Thread 0x7ffff770c6c0 (LWP 158753)]
+[New Thread 0x7ffff6cc66c0 (LWP 158754)]
+[Switching to Thread 0x7ffff6cc66c0 (LWP 158754)]
+
+Thread 3 "qemu-system-ris" hit Breakpoint 1, get_physical_address (env=0x555556a076a0, physical=0x7ffff6cc55f0, ret_prot=0x7ffff6cc55d8, addr=4096, fault_pte_addr=0x0, access_type=2, mmu_idx=3, first_stage=true, two_stage=false, is_debug=false, is_probe=false) at ../target/riscv/cpu_helper.c:1226
+1226	    if (mode == PRV_M || !riscv_cpu_cfg(env)->mmu) {
+
+===== [A] get_physical_address: mode=3 addr=0x1000 mmu_idx=3 access_type=2
+#0  get_physical_address (env=0x555556a076a0, physical=0x7ffff6cc55f0, ret_prot=0x7ffff6cc55d8, addr=4096, fault_pte_addr=0x0, access_type=2, mmu_idx=3, first_stage=true, two_stage=false, is_debug=false, is_probe=false) at ../target/riscv/cpu_helper.c:1226
+#1  0x0000555555ce94f4 in riscv_cpu_tlb_fill (cs=0x555556a03ba0, address=4096, size=1, access_type=MMU_INST_FETCH, mmu_idx=3, probe=false, retaddr=0) at ../target/riscv/cpu_helper.c:1848
+#2  0x0000555555c855c4 in tlb_fill_align (cpu=0x555556a03ba0, addr=4096, type=MMU_INST_FETCH, mmu_idx=3, memop=MO_8, size=1, probe=false, ra=0) at ../accel/tcg/cputlb.c:1255
+#3  0x0000555555c85d63 in probe_access_internal (cpu=0x555556a03ba0, addr=4096, fault_size=1, access_type=MMU_INST_FETCH, mmu_idx=3, nonfault=false, phost=0x7ffff6cc5790, pfull=0x7ffff6cc5788, retaddr=0, check_mem_cbs=false) at ../accel/tcg/cputlb.c:1375
+#4  0x0000555555c86596 in get_page_addr_code_hostp (env=0x555556a076a0, addr=4096, hostp=0x0) at ../accel/tcg/cputlb.c:1545
+#5  0x0000555555c6eb91 in get_page_addr_code (env=0x555556a076a0, addr=4096) at ../accel/tcg/internal-common.h:108
+#6  0x0000555555c6f19a in tb_htable_lookup (cpu=0x555556a03ba0, s=...) at ../accel/tcg/cpu-exec.c:203
+#7  0x0000555555c6f39f in tb_lookup (cpu=0x555556a03ba0, s=...) at ../accel/tcg/cpu-exec.c:248
+#8  0x0000555555c70a48 in cpu_exec_loop (cpu=0x555556a03ba0, sc=0x7ffff6cc5970) at ../accel/tcg/cpu-exec.c:964
+1227	        *physical = addr;
+1228	        *ret_prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+1229	        return TRANSLATE_SUCCESS;
+[A] *physical=0x1000 prot=7  (M 模式 / bare：不做页表翻译，VA 直接等于 PA)
+Breakpoint 2 at 0x555555c886bd: file ../accel/tcg/cputlb.c, line 1653.
+Breakpoint 3 at 0x555555ce91f5: file ../target/riscv/cpu_helper.c, line 1767.
+Breakpoint 4 at 0x555555ce7ee9: file ../target/riscv/cpu_helper.c, line 1290.
+Breakpoint 5 at 0x555555ce82bd: file ../target/riscv/cpu_helper.c, line 1356.
+Breakpoint 6 at 0x555555ce8519: file ../target/riscv/cpu_helper.c, line 1408.
+Breakpoint 7 at 0x555555ce85d3: file ../target/riscv/cpu_helper.c, line 1432.
+Breakpoint 8 at 0x555555ce8c07: file ../target/riscv/cpu_helper.c, line 1609.
+Breakpoint 9 at 0x555555ce95e5: file ../target/riscv/cpu_helper.c, line 1876.
+Breakpoint 10 at 0x555555ce9628: file ../target/riscv/cpu_helper.c, line 1878.
+Breakpoint 11 at 0x555555ce95e5: file ../target/riscv/cpu_helper.c, line 1876.
+[T1] mmu_lookup1: addr=0xffffffffc0205ff8 access_type=1 tlb_addr=0xffffffffffffffff -> MISS
+
+===== [B] TLB miss -> riscv_cpu_tlb_fill(address=0xffffffffc0205ff8, size=8, access_type=1, mmu_idx=1, probe=0)
+      guest pc=0xffffffffc02000d6 satp=0x8000000000080206
+#0  riscv_cpu_tlb_fill (cs=0x555556a03ba0, address=18446744072637931512, size=8, access_type=MMU_DATA_STORE, mmu_idx=1, probe=false, retaddr=140735245101958) at ../target/riscv/cpu_helper.c:1767
+#1  0x0000555555c855c4 in tlb_fill_align (cpu=0x555556a03ba0, addr=18446744072637931512, type=MMU_DATA_STORE, mmu_idx=1, memop=2563, size=8, probe=false, ra=140735245101958) at ../accel/tcg/cputlb.c:1255
+#2  0x0000555555c8876a in mmu_lookup1 (cpu=0x555556a03ba0, data=0x7ffff6cc5290, memop=2563, mmu_idx=1, access_type=MMU_DATA_STORE, ra=140735245101958) at ../accel/tcg/cputlb.c:1656
+#3  0x0000555555c88a9d in mmu_lookup (cpu=0x555556a03ba0, addr=18446744072637931512, oi=82017, ra=140735245101958, type=MMU_DATA_STORE, l=0x7ffff6cc5290) at ../accel/tcg/cputlb.c:1748
+#4  0x0000555555c8bb28 in do_st8_mmu (cpu=0x555556a03ba0, addr=18446744072637931512, val=2147554910, oi=82017, ra=140735245101958) at ../accel/tcg/cputlb.c:2793
+#5  0x0000555555c8c610 in helper_stq_mmu (env=0x555556a076a0, addr=18446744072637931512, val=2147554910, oi=82017, retaddr=140735245101958) at ../accel/tcg/ldst_common.c.inc:107
+#6  0x00007fff7a4aabd2 in code_gen_buffer ()
+#7  0x0000555555c6f981 in cpu_tb_exec (cpu=0x555556a03ba0, itb=0x7fffb532da40, tb_exit=0x7ffff6cc58e0) at ../accel/tcg/cpu-exec.c:439
+#8  0x0000555555c707d1 in cpu_loop_exec_tb (cpu=0x555556a03ba0, tb=0x7fffb532da40, pc=18446744072637907158, last_tb=0x7ffff6cc58e8, tb_exit=0x7ffff6cc58e0) at ../accel/tcg/cpu-exec.c:889
+[B1] 读 satp：base=0x80206000, vm=8, levels=3, ptidxbits=9, ptesize=8, va_bits=39
+[B2] level i=0: idx=0x1ff, pte_addr=0x80206ff8
+[B3] 读出 pte=0x200000cf, ppn=0x80000 (V=1,R=1,W=1,X=1)
+[B4] 命中叶子 PTE: pte=0x200000cf, ppn=0x80000, ptshift=18 (本项覆盖 2^18 个 4KiB 页)
+[B5] 合成物理地址: *physical=0x80205ff8, prot=7 (1=READ,2=WRITE,4=EXEC)
+[C] tlb_set_page(vaddr_page=0xffffffffc0205000, pa_page=0x80205000, prot=7, mmu_idx=1, tlb_size=0x1000)
+[D] 扫描 fast TLB（NB_MMU_MODES=22）中 vpage=0xffffffffc0205000 的条目：
+    f[20][5]: addr_write=0xffffffffc0205000, addend=0x7fffb2200000 (addend + vaddr = host 地址)
+[E] dtb_init 的数据访存: vaddr_page=0xffffffffc7e00000, pa_page=0x87e00000, prot=7, tlb_size=0x1000
+[F] 结束调试
+[Inferior 1 (process 158750) killed]
