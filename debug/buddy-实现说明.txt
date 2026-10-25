@@ -1,0 +1,53 @@
+Buddy System 实现说明与验证（2026-10-25）
+
+修改文件：
+- code/lab2/kern/mm/buddy_pmm.c：分阶空闲链表、初始化、分配、回收、检查和注册。
+- code/lab2/kern/mm/buddy_pmm.h：导出 buddy_pmm_manager。
+- code/lab2/kern/mm/pmm.c：包含 Buddy 头文件并选择 buddy_pmm_manager。
+
+核心设计：
+1. 第 k 阶链表保存 2^k 页的空闲块；按实际 property 字段宽度限制最大阶。
+2. 初始区间按物理页号对齐和剩余页数拆分，保留不规整区间的全部页面。
+3. 分配先向上取整，从足够大的阶取块，逐级对半拆分。
+4. Page.property 在块首页保存实际块页数，只有空闲块首页设置 PageProperty；
+   分配块首页不设置 PageProperty，块内其他页 property 为 0。
+   因而申请 3 页后，free_pages(base,3) 仍能核对并归还实际 4 页。
+5. 伙伴页号=当前物理页号 XOR 当前块页数；检查范围、空闲状态和同阶后才合并。
+6. 回收以整个分配块为单位，不支持 First-Fit 式任意拆开已分配块再分别释放。
+7. 非法地址、内部页地址、错误大小和重复释放通过断言拒绝，避免静默破坏链表。
+8. 不修改公共 Page 结构、现有页面标志宏、已有测试或评分规则。
+
+当前 check 回调验证链表、块边界、页面状态、不可再合并的伙伴关系及空闲页计数，
+并按测试提示词覆盖以下六类场景：1 页分配回收、3 页按 4 页计数并按原请求释放、
+16 页块分裂与递归合并、相邻非伙伴不能合并、失败请求不改变状态、多块不重叠且乱序释放。
+失败请求覆盖 0 页、超大请求、总空闲页不足、耗尽和碎片化，逐字段核对页面描述符和链表链接。
+测试暂存真实空闲链表和全局页描述符范围，用私有描述符运行确定性场景；
+所有测试分配回收完毕后，恢复真实分配器状态和原空闲页数，再打印成功。
+本轮仅扩展 Buddy 自测及其记录，分配算法、公共结构、已有框架测试和评分脚本未改动。
+
+实际验证：
+1. RISC-V 交叉编译成功，独立输出目录为 obj/buddy-check 和 bin/buddy-check。
+2. debug/buddy_host_check.c 直接使用真实内核头文件和 Buddy 模块，在宿主机检查：
+   不规则起点和 101 页区间、保留页、3->4 和 5->8 页取整、分裂与递归合并、
+   相邻但非伙伴的块、分段注册和保留空洞、3000 次混合操作以及失败请求。
+3. 另外四个独立进程分别验证重复释放、错误大小、内部页和空指针释放被拒绝。
+4. QEMU 的 32M、64M、96M、128M 四种配置均输出：
+   memory management: buddy_pmm_manager
+   buddy_check: all 6 scenarios passed; allocator state restored.
+   buddy_check() succeeded!
+   check_alloc_page() succeeded!
+   随后打印 satp 地址，证明页分配初始化流程返回。
+
+复现（在 WSL 的 code/lab2 目录）：
+source /home/mamou/.config/compiler-course/riscv-env.sh
+make OBJDIR=obj/buddy-check BINDIR=bin/buddy-check
+cd ../..
+python3 debug/check_buddy.py
+
+原始验证输出保存在 debug/buddy-validation.log。
+测试启动独立 QEMU，不占用 1234 调试端口，也不覆盖原 bin/kernel。
+该记录是助手执行的实现验证；学生的调试过程和学习收获应另外如实记录。
+
+重新使用 VS Code 调试前，先结束旧的客体/宿主会话，按 Ctrl+Shift+B 更新默认镜像，
+然后再启动两套配置。旧会话加载的仍是之前的镜像，不会因改源码自动变成 Buddy。
+框架 make grade 中的 Best-Fit 检查仍按原规则保留；本次未把它改为 Buddy 评分。

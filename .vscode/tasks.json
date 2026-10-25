@@ -1,0 +1,29 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Lab2：编译内核",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/debug/environment.sh", "build"],
+      "group": {"kind": "build", "isDefault": true},
+      "problemMatcher": ["$gcc"],
+      "presentation": {"reveal": "always", "panel": "dedicated"}
+    },
+    {
+      "label": "Lab2：查看环境状态",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/debug/environment.sh", "check"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Lab2：查看 QEMU 串口输出",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/debug/environment.sh", "uart"],
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated"}
+    }
+  ]
+}

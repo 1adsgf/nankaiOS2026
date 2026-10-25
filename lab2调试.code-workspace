@@ -1,0 +1,9 @@
+{
+  "folders": [
+    {"name": "实验二", "path": "."},
+    {"name": "QEMU源码", "path": "/home/mamou/src/compiler-course-env/qemu-7.0.0"}
+  ],
+  "settings": {
+    "debug.showDisassembly": "always"
+  }
+}

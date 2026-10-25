@@ -1,0 +1,46 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "1：宿主 GDB 启动 QEMU（CPU 暂停）",
+      "type": "gdb",
+      "request": "launch",
+      "gdb": "/usr/bin/gdb",
+      "program": "/opt/qemu/bin/qemu-system-riscv64",
+      "cwd": "${workspaceFolder}",
+      "arguments": "-machine virt -m 128M -display none -monitor none -serial file:${workspaceFolder}/debug/qemu-serial.log -bios default -kernel ${workspaceFolder}/code/lab2/bin/ucore.img -gdb tcp:127.0.0.1:1234 -S",
+      "run": "all",
+      "preLaunchTask": "Lab2：编译内核",
+      "preConnectCommands": [
+        "set pagination off",
+        "set confirm off",
+        "handle SIGPIPE nostop noprint"
+      ],
+      "initCommands": [
+        "source ${workspaceFolder}/debug/host.gdb"
+      ]
+    },
+    {
+      "name": "2：RISC-V GDB 连接 Lab2（保持暂停）",
+      "type": "gdbtarget",
+      "request": "attach",
+      "gdb": "/opt/riscv-medany/bin/riscv64-unknown-elf-gdb",
+      "program": "${workspaceFolder}/code/lab2/bin/kernel",
+      "cwd": "${workspaceFolder}/code/lab2",
+      "run": "preserve",
+      "target": {
+        "type": "remote",
+        "host": "127.0.0.1",
+        "port": "1234"
+      },
+      "preConnectCommands": [
+        "set arch riscv:rv64",
+        "set pagination off",
+        "set remotetimeout unlimited"
+      ],
+      "initCommands": [
+        "break *kern_init"
+      ]
+    }
+  ]
+}

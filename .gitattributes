@@ -1,0 +1,7 @@
+code/lab2/** text eol=lf
+debug/*.sh text eol=lf
+debug/*.py text eol=lf
+debug/*.gdb text eol=lf
+.vscode/*.json text eol=lf
+*.code-workspace text eol=lf
+*.png binary

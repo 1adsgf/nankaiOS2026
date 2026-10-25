@@ -1,0 +1,66 @@
+Buddy 实现提示词（准备稿，尚未用它生成实现）
+
+学习时先按 buddy_pmm.c 中的步骤讨论、实现；下面是最终完整实现阶段可使用的提示词。
+不要把这份准备稿写成已经运行过或通过测试的实验记录。
+
+[PROMPT]
+在当前工程 code/lab2 中完成 Buddy System 物理页分配模块。
+必须先阅读实际源文件，不要假设接口或宏存在。
+本轮只修改 kern/mm/buddy_pmm.c 和 kern/mm/buddy_pmm.h。
+完成实际代码修改，并解释每个回调、状态不变式、分裂和合并的规则。
+不修改 struct Page、公共页面标志宏、已有分配器、框架测试及评分脚本。
+暂不更改 pmm.c 的分配器选择；模块和下一轮测试都完成后，再单独接入。
+
+[RELY]
+实际接口在 kern/mm/pmm.h：
+- struct pmm_manager 包含 name、init、init_memmap、alloc_pages、free_pages、nr_free_pages、check。
+- alloc_pages 的返回值是 struct Page *，不是可直接读写的物理内存指针。
+- page2ppn、page2pa、pa2page、set_page_ref，以及 pages、nbase、npage 全局量可供核对。
+实际数据结构在 kern/mm/memlayout.h：
+- struct Page 字段为 ref、flags、property、page_link。
+- PageReserved、SetPageReserved、ClearPageReserved、PageProperty 等宏已定义。
+链表接口在 libs/list.h：list_init、list_add、list_del、list_empty、list_next 等。
+现有 default_pmm.c 和 best_fit_pmm.c 可用于理解接口，不要盲目照抄链表插入逻辑。
+PGSIZE/PGSHIFT 的实际定义须从 mmu.h 核对。
+当前使用者会在 pmm_init 中依次调用 init、page_init/init_memmap、check。
+
+[GUARANTEE]
+提供以下回调，其参数和返回值符合 pmm.h；内部函数名可使用：
+static void buddy_init(void);
+static void buddy_init_memmap(struct Page *base, size_t n);
+static struct Page *buddy_alloc_pages(size_t n);
+static void buddy_free_pages(struct Page *base, size_t n);
+static size_t buddy_nr_free_pages(void);
+static void buddy_check(void);
+在头文件声明、在源文件定义：
+extern const struct pmm_manager buddy_pmm_manager;
+注册结构应是 const struct pmm_manager，并设置正确的名称和六个回调。
+本轮 check 至少检验内部状态不变式；不能用无条件成功打印代替检查。
+后续单独使用测试提示词扩展为完整行为测试。
+
+[SPECIFICATION]
+Preconditions:
+- init_memmap 收到 n>0、连续且已保留的物理页描述符区间。
+- 当前是单核教学环境，不要求额外实现并发分配。
+- 物理页描述符下标不等于物理页号；明确 page2ppn(base) 的含义。
+
+Postconditions and requirements:
+1. 每个阶 k 的空闲块大小为 2^k 页，维护各阶空闲链表和正确的空闲页总数。
+2. init_memmap 能处理起点未对齐到大块、长度不是 2 的幂的区间，不能丢弃尾页，
+   不能把 OpenSBI、内核或描述符数组重新放入空闲区。
+3. 申请 n 页时，向上取整为能容纳 n 的 2 的幂；从适合的阶寻找，必要时逐级分裂。
+4. 分配返回块必须满足物理页号的对应阶对齐；空闲页数按实际块大小减少。
+5. size_t 向上取整和移位要有上界，拒绝超过可管理范围或会溢出的请求。
+   n==0 的分配返回 NULL；失败时不得改变空闲链表或页计数。
+6. 伙伴关系以物理页号和阶数判断，不能把任意两个地址相邻的块都当成伙伴。
+7. 回收 alloc_pages(n) 返回的块时，释放接口仍可能收到原始 n；例如申请 3 页，
+   必须能够正确归还实际分配的 4 页。保存并校验足够的分配状态。
+8. 只有伙伴位于可管理范围内、空闲、且阶数相同时才能合并；合并后继续尝试上一阶。
+   在 pa2page 或访问描述符前先做上下界检查。
+9. 同一个页不能同时出现在两个空闲块中。任意操作后，链表、页状态和 nr_free 一致。
+10. 非法释放或重复释放不能静默破坏链表；说明采用的防御策略及其调用约束。
+
+Validation:
+- 先执行语法/编译检查，不修改框架测试，不通过删断言或修改评分规则来通过。
+- 此时当前 pmm.c 仍选择 Best-Fit：编译成功不等于 Buddy 已接入或通过运行测试。
+- 说明实际修改文件和尚未验证的部分，不虚构日志。

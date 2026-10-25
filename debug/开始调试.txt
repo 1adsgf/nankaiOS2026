@@ -1,0 +1,151 @@
+Lab2 页表查询与地址翻译：准备与操作
+
+一、当前工程在哪里
+
+实验二 Git 工作目录：D:\新文档\操作系统\nankaiOS2026-lab2
+本地分支：lab2，跟踪 origin/lab2。
+可编译工程：本目录下的 code/lab2。
+课程原包解压副本：D:\新文档\操作系统\lab2\lab2_new。
+队友原始提交仍在 code/练习；调试工程复用了其中的 pmm.c 和 best_fit_pmm.c。
+
+二、已经完成的准备
+
+1. 在 Ubuntu-22.04 安装宿主机 GDB 12.1。
+2. 保留并复用 /opt/riscv-medany/bin/riscv64-unknown-elf-gdb。
+3. 复用 /opt/qemu/bin/qemu-system-riscv64（QEMU 7.0.0，带调试信息）。
+4. QEMU 源码在 /home/mamou/src/compiler-course-env/qemu-7.0.0。
+5. 将课程框架放入 code/lab2，复用队友已经写好的内存初始化和 Best-Fit。
+6. 准备阶段先选择 Best-Fit；Buddy 实现完成后，当前 pmm.c 已改为选择 buddy_pmm_manager。
+7. Makefile 的 qemu/debug/test 启动参数改用 -kernel，兼容当前默认 OpenSBI。
+8. entry.S 的启动页表增加根项 2 的恒等映射，使开启 satp 后仍能执行低地址过渡代码。
+   根项 511 的高地址映射仍保留。两个都是 1 GiB 叶子映射。
+9. 已编译成功，并通过独立 1235 端口检查：宿主 GDB 启动 QEMU，RISC-V GDB 连接，
+   内核可以到达 kern_init，且 Sv39 已启用。验证会话已经关闭。
+
+上述是环境验证，不是学生的页表实验结果。当前没有替学生记录页表遍历结果。
+Buddy 已按 debug/buddy-实现说明.txt 中的独立检查验证；尚未运行 make grade。
+Best-Fit 原实现两处链表尾插后没有退出循环，应交给算法部分负责人复查。
+
+三、在 VS Code 打开什么
+
+打开项目根目录的 lab2页表调试.code-workspace，左下角必须显示 WSL: Ubuntu-22.04。
+工作区里包含“实验二”和“QEMU源码”两个文件夹。
+
+主要阅读与设断点的文件：
+- 实验二/code/lab2/kern/init/entry.S：启动页表、csrw satp、sfence.vma、高地址跳转。
+- 实验二/code/lab2/kern/init/init.c：选取进入 C 入口后的真实访存指令。
+- 实验二/code/lab2/kern/mm/memlayout.h：内核虚实地址偏移。
+- QEMU源码/target/riscv/cpu_helper.c：get_physical_address，核心页表查询函数。
+  当前版本的入口约在 744 行，循环约在 876 行，普通 PTE 地址计算约在 908 行，
+  64 位 PTE 读取约在 923 行，最终物理地址计算约在 1033 行。
+- QEMU源码/target/riscv/cpu_helper.c：riscv_cpu_tlb_fill，约在 1181 行。
+  此处主要用于理解谁调用了页表查询，不抢做队友负责的 TLB 分析。
+
+通常不需要改 QEMU 的地址翻译算法。通过源码断点、单步和变量观察完成任务。
+需要填写的是 report/页表调试记录.md；要调整目标地址过滤时使用 debug/host.gdb 的命令。
+
+四、启动次序
+
+1. Ctrl+Shift+B 编译。或菜单“终端 -> 运行任务 -> Lab2：编译内核”。
+2. 在“运行和调试”的配置下拉框选择“1：宿主 GDB 启动 QEMU（CPU 暂停）”，
+   点击绿色启动三角。
+   这个配置已经启动 QEMU，因此本流程不要额外运行 make debug。
+3. 再选择“2：RISC-V GDB 连接 Lab2（保持暂停）”，点击绿色启动三角。
+   客体 CPU 仍暂停在复位处，配置已经设置 kern_init 入口断点。
+4. 调试控制台顶部/右侧的会话下拉框选择 RISC-V 会话，输入：
+   > c
+   等它停在 kern_init。
+   这里的 > 必须一并输入，c 必须小写；直接输入 C 或 c 可能被扩展当作 C 表达式求值。
+   若客体一直等待，检查宿主会话是否暂停：QEMU 本体暂停时无法回复远端请求。
+   先恢复宿主会话，再等待客体响应；若已命中 kern_init，不要再继续一次。
+   客体启动配置已设置 set remotetimeout unlimited：宿主断点会暂停整个 QEMU，
+   客体 GDB 必须能够等待人工单步完成，不能使用默认的短超时。
+   若此前出现 Invalid remote reply、Remote failure reply: E14 或寄存器读取异常，
+   先恢复宿主会话，结束客体会话，再停止宿主会话；重新按 2、3、4 启动。
+   同时取消 cpu_helper.c 中手动设置的无条件源码断点；host.gdb 会建立过滤
+   is_debug 的条件断点，待 lab2-arm ADDRESS 指定目标地址后再命中。
+5. 如果要看内核串口输出，运行任务“Lab2：查看 QEMU 串口输出”。
+   输出文件是 debug/qemu-serial.log；它不会出现在一个新 QEMU 窗口中。
+
+五、你要自己做的观察
+
+1. 在 RISC-V 会话查看：
+   > info registers pc sp ra
+   > p/x $satp
+   > x/12i $pc
+
+2. 选一条即将执行、还没执行的 ld/sd/lw/sw 等访存指令。
+   建议从 kern_init 的第一条栈访问开始，避免已经被缓存的重复访问。
+   以你实际反汇编为准，不把固定地址背进报告。
+   比如如果选到 sd ra,8(sp)，其有效虚拟地址是 sp+8，先计算：
+   > p/x $sp+8
+   这是示例用法，其他指令必须按自己的基址寄存器和偏移计算。
+
+3. 记录该指令的 PC、反汇编、有效虚拟地址和 satp。
+4. 在“调用堆栈”中选择宿主 GDB 会话，点击暂停。
+   调试控制台切换到宿主会话，输入：
+   > lab2-arm 你刚算出的虚拟地址
+   再继续宿主会话，让 QEMU 恢复运行。
+5. 回到 RISC-V 会话，执行一次：
+   > si
+   如果这次访问触发了真实页表查询，宿主 GDB 将停在 get_physical_address。
+   这时 RISC-V GDB 可能仍在等远端响应：QEMU 被另一个调试器暂停，属于正常现象。
+6. 切到宿主会话，输入：
+   > lab2-context
+   使用 next（C 源码级单步）或源码行断点，观察相应赋值完成后的变量：
+   addr、env->satp、base、levels、ptidxbits、ptesize、i、ptshift、idx、pte_addr、pte、ppn。
+   idx、pte 等局部变量在执行赋值前没有观察意义；优化构建也可能显示 optimized out。
+   如果关键变量持续不可见，再单独准备无优化的 QEMU 构建，不要把它误判为翻译失败。
+7. 用 bt 看调用栈；观察何时发现叶子 PTE，为什么结束遍历。
+   Sv39 支持三级页表，但当前启动页表使用顶层 1 GiB 叶子，不保证走满三级。
+8. 在函数成功返回前保存输出指针，例如：
+   > set $lab2_pa_out = physical
+   > finish
+   > p/x *$lab2_pa_out
+   这里只读取 QEMU 模拟器写出的结果，不修改页表。
+   将实测物理地址与自己的页表计算对照。
+
+宿主 GDB 的 $pc 是宿主 x86-64 指令位置，不是客体 RISC-V PC。
+QEMU 源码也注明 get_physical_address 内 env->pc 未必及时同步；
+因此客体访存指令的 PC 应在 RISC-V 会话执行 si 之前记录。
+pte_addr 是客体物理地址，不是宿主进程指针；不要在宿主 GDB 直接 x/gx pte_addr。
+可以观察 QEMU 已读取的 pte 局部变量。
+
+六、手工解释时用的关系
+
+Sv39 虚拟地址索引：VPN2=(VA>>30)&0x1ff，VPN1=(VA>>21)&0x1ff，VPN0=(VA>>12)&0x1ff。
+根页表物理地址：satp 的 PPN 字段左移 12 位。
+一个 PTE 为 8 字节，所以 PTE 地址=当前页表基址+本级索引*8。
+检查 V、R、W、X 等位，区分无效项、非叶子和叶子。
+遇到当前框架的顶层叶子时，用其物理基址加虚拟地址低 30 位的偏移组成物理地址。
+把实际计算过程写在记录里，不只写“虚拟地址减去一个偏移”。
+
+七、结束
+
+如果宿主 GDB 停住，先让它继续，使客体 GDB 能完成当前请求。
+先结束 RISC-V 会话，再停止宿主会话；宿主会话停止时会结束它启动的 QEMU。
+如有串口 tail 任务，在该终端按 Ctrl+C 即可。
+本次新准备的工程和配置尚未提交或推送。
+
+八、Buddy 新增分工（逐步实现）
+
+已按用户后来提供的简短四段式提示词实现 kern/mm/buddy_pmm.c/.h，并接入 pmm.c。
+实现提示词见 debug/buddy-实现提示词.txt，测试提示词见 debug/buddy-测试提示词.txt。
+上述两个较长版本仍为参考稿，不应写成实际使用过的提示词。
+当前 pmm.c 选择 Buddy；独立构建输出在 bin/buddy-check，原调试镜像没有覆盖。
+结束旧调试会话后，Ctrl+Shift+B 会重新生成默认镜像，再启动两套调试配置。
+
+九、2026-10-25 远程协议异常的助手复现记录
+
+用户实际遇到：读取 satp 提示 fetch_register_using_p: early buf termination；
+continue 后提示 Invalid remote reply: 4350552330205b72756e6e696e675d、
+Invalid remote reply: 0000000000000000、Remote failure reply: E14，仍停在 0x1000。
+助手只读检查确认当前只有一条客体 GDB 连接，未发现重复客户端。
+独立 CLI 和 VS Code 调试适配器探测均可正常到达 kern_init。
+随后在独立端口启动临时 QEMU，主动暂停该临时进程约 5 秒：
+- remotetimeout=2 时，复现 Invalid remote reply: 4350552330205b72756e6e696e675d
+  和 Remote failure reply: E14，客体仍停在 0x1000。
+- remotetimeout=600 时，恢复后可正常读取 satp，命中 kern_init，寄存器读取正常。
+GDB 17.2 已验证接受 set remotetimeout unlimited，故客体 launch.json 使用无限等待。
+该设置不会自动恢复被宿主暂停的 QEMU，仍需在宿主会话继续执行。
+这些是助手执行的独立排错验证，不能写成学生已完成的页表翻译实测或截图。
