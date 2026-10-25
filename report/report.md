@@ -55,19 +55,35 @@
 
 ### 2.1 本章节的逻辑主线
 
-[请用自己的话描述本章实验的核心主线，例如：
+本章围&#x7ED5;__&#x7269;理内存管&#x7406;__&#x8FD9;一核心主题展开，解决的问题是：操作系统启动后，如何把硬件提供的物理内存转化为内核可管理、可分配、可回收的资源，并在页级分配的基础上进一步支持小对象的高效分配。
 
-- 本章围绕哪个核心主题展开？（例如：用户进程管理、虚拟内存、文件系统等）
-- 整个实验解决什么问题？（例如：如何让用户程序运行在操作系统之上）]
+整章的逻辑主线可以概括为：
+
+1. __先建立物理内存的描述体系__：通过 `page_init()` 解析设备树报告的内存范围，建立 `struct Page` 描述符数组，区分内核已占用区域和真正可用的空闲页，为后续所有分配器提供统一的页管理基础。
+2. __在页级实现 Best-Fit 分配器__：有了空闲页之后，需要一套具体的分配和回收策略。Best-Fit 通过“选择满足请求的最小空闲块”，减少大块内存被小请求浪费的情况，并完成空闲块的拆分与相邻合并。
+3. __进一步实现 Buddy System 分配器__：在相同的 `pmm_manager` 接口下，用 `2^k` 页的空闲块组织方式实现按 order 拆分和合并。它和 Best-Fit 是两种不同的页分配策略，但共享同一套页级抽象，因此可以在不改变上层调用方式的情况下切换。
+4. __最后实现 SLUB 对象分配器__：页分配器解决的是“按页分配”，但内核中的很多对象远小于一页。SLUB 在页分配器之上增加第二层对象缓存，用 slab 管理固定大小的小对象，并为超过缓存上限的请求提供页级大对象回退，从而形成“页级分配 → 对象级分配”的完整层次。
+
+因此，本章不是孤立地实现几个分配算法，而是按照“__物理内存初始化 → 页级分配策略 → 对象级分配策略__”的顺序，逐步构建一个分层的物理内存管理体系。这一章也为后续虚拟内存管理、进程创建和内核对象管理提供了基础。
 
 ### 2.2 功能的逐步实现
 
-[说明本章实验是按照什么顺序逐步实现各个功能的，以及为什么要按这个顺序，例如：
+本章实验按照以下顺序逐步实现各功能：
 
-1. 首先实现**功能A** → 为什么首先实现这个？（例如：建立系统调用接口是后续所有用户态功能的基础）
-2. 接着再完善**功能B** → 为什么接着实现这个？（例如：有了系统调用后，需要能够加载和启动第一个用户进程）
-3. 然后完成**功能C** → 为什么然后实现这个？（例如：有了第一个进程后，需要实现进程复制功能）
-4. 最后补充了**功能D** → 为什么最后实现这个？（例如：最后完善进程退出和清理机制，形成完整闭环）]
+1. __首先实现 `page_init()` 物理页初始化__\
+   这是整个内存管理的前提。只有先根据 DTB 获取物理内存范围，建立 `struct Page` 数组，并把内核镜像、OpenSBI、页描述符数组等区域标记为保留页，才能得到安全、准确的空闲页集合。没有这一步，后续 Best-Fit 和 Buddy 都没有可以管理的物理页。
+
+2. __接着实现 Best-Fit 页分配器__\
+   在 `page_init()` 建立空闲页链表之后，需要提供具体的页分配和释放能力。Best-Fit 通过维护按地址有序的空闲块链表，在分配时选择“容量最小且满足请求”的空闲块，并在释放时与前后相邻空闲块合并。这样既完成了 Lab2 的基础页分配功能，也通过 `best_fit_check()` 验证了页初始化结果和分配器行为是否正确。
+
+3. __然后实现 Buddy System 页分配器__\
+   Best-Fit 验证通过后，页级 `pmm_manager` 接口已经稳定，因此可以在同一接口下实现另一种页分配策略。Buddy 按 `2^k` 页组织空闲块，利用物理页号的异或关系寻找 buddy，在分配时逐层拆分，在释放时逐层合并。把它放在 Best-Fit 之后实现，是为了在已有页级抽象和测试框架的基础上，专注于 order 管理、地址对齐和拆分/合并逻辑，而不必重复处理物理内存初始化问题。
+
+4. __最后实现 SLUB 对象分配器__\
+   SLUB 依赖前两层提供的 `alloc_pages()` 和 `free_pages()`，因此必须放在页分配器之后实现。它先为 8、16、32、64、128、256 字节建立固定大小缓存，每个 slab 从页分配器申请一页，用空闲对象链表和状态位图管理对象；当整个 slab 空闲时再把页归还给页分配器。对于超过 256 字节的请求，则通过连续多页的大对象路径处理。这样就在页级分配之上补齐了对象级分配，使整个内存管理模块形成从物理页到内核对象的完整闭环。
+
+5. __在每一层完成后同步进行测试__\
+   `page_init()` 完成后通过 `[Test 1] Page Init` 检查内存范围和保留页；Best-Fit 完成后通过 `best_fit_check()` 和 `make grade` 验证；Buddy 完成后通过 `buddy_check()` 验证拆分、合并、对齐和 OOM；SLUB 完成后通过 `slub_check()` 验证大小类、slab 扩展、页回收、对象复用和大对象分配。按照“实现一层、验证一层”的顺序推进，可以尽早发现底层页管理错误，避免问题累积到上层对象分配阶段。
 
 ---
 
@@ -78,83 +94,959 @@
 每个功能模块或者练习中可能包含多项任务，请根据实际情况调整
 -->
 
-### 功能模块：[模块名称]
+# 四、实验内容与实现
 
-**负责人：** [学号-姓名]
+## 模块一：物理页初始化 `page_init`
 
-#### 模块功能描述
+负责人：`2411189-李梓宸`
+
+### 模块功能描述
 
 **需要实现/修改的函数：**
 
 ```c
-// 列出本模块涉及的所有函数签名
-void example_function(void);
-int another_function(int arg);
+static void page_init(void);
+
+/* 调用链中涉及的相关函数 */
+static void init_pmm_manager(void);
+static void init_memmap(struct Page *base, size_t n);
+static void check_alloc_page(void);
+void pmm_init(void);
+```
+
+本次主要实现 `page_init()`，并将 `init_pmm_manager()` 中的页分配器切换为：
+
+```c
+pmm_manager = &best_fit_pmm_manager;
 ```
 
 **功能说明：**
 
-[简要描述该模块的功能，包括：
+1. **在系统中的作用**
 
-- 该模块在整个系统中的作用
-- 需要处理的主要场景
-- 与其他模块的交互关系]
+   `page_init()` 负责根据设备树 DTB 报告的物理内存范围，建立 `struct Page` 描述符数组，并把内核、OpenSBI、页描述符数组之外的内存登记为空闲页，供 Best-Fit 或 Buddy 页分配器管理。
 
-#### 最终提示词
+2. **需要处理的主要场景**
 
-以下是经过迭代优化后，最终成功实现该功能的提示词：
+   - 从 DTB 获取物理内存基址和大小；
+   - 检查物理内存范围是否非法或溢出；
+   - 计算 `npage`、`va_pa_offset`；
+   - 将 `pages` 数组放在内核 `end` 之后，并保证页对齐；
+   - 将 OpenSBI、内核镜像、`pages` 数组本身标记为 `PageReserved`；
+   - 只将内核和页描述符数组之后的完整页登记为空闲内存；
+   - 保证 `page2pa()` / `pa2page()` 往返转换正确。
 
-```markdown
-[按照提示词模板，给出具体的提示词]
+3. **与其他模块的交互关系**
+
+   ```text
+   DTB
+    ↓
+   page_init()
+    ↓
+   pmm_manager->init_memmap()
+    ↓
+   Best-Fit / Buddy 空闲页链表
+    ↓
+   alloc_pages() / free_pages()
+    ↓
+   SLUB 通过页分配器申请 slab 页
+   ```
+
+### 最终提示词
+
+```text
+[ROLE]
+你是一名 uCore/RISC-V 内核开发者。请实现 Lab2 的物理页初始化函数 page_init()。
+
+[CONTEXT]
+代码位于 kern/mm/pmm.c。系统运行在 RISC-V 的 virt 机器上，物理内存起始地址为
+DRAM_BASE=0x80000000。内核镜像加载在 KERNEL_BEGIN_PADDR，内核虚拟地址与物理地址
+之间存在 PHYSICAL_MEMORY_OFFSET 偏移。已有 pages、npage、nbase、va_pa_offset 等全局变量，
+以及 init_memmap()、alloc_pages()、free_pages()、nr_free_pages() 等封装函数。
+
+[SPECIFICATION]
+请实现 page_init()，要求：
+1. 使用 get_memory_base() 和 get_memory_size() 获取 DTB 报告的物理内存范围；
+2. 校验 mem_size 非 0、mem_base 位于 DRAM_BASE 之后、mem_end 不溢出；
+3. 设置 npage = PPN(mem_end)；
+4. 设置 va_pa_offset = PHYSICAL_MEMORY_OFFSET；
+5. 将 pages 数组放在内核 end 之后，并向上按 PGSIZE 对齐；
+6. 计算 pages 数组占用的页数和结束物理地址，确保它不超出物理内存末尾；
+7. 初始时把 [nbase, npage) 范围内所有 Page 描述符都标记为 PageReserved；
+8. 第一个可空闲页从 pages 数组结束地址开始，不能把内核镜像、OpenSBI 或 pages 数组交给分配器；
+9. 如果存在至少一个完整空闲页，调用 init_memmap(pa2page(free_start_pa), free_pages)；
+10. 对非法物理内存范围、页描述符数组放不下等情况使用 panic() 报错；
+11. 输出物理内存范围、npage、pages 地址、空闲内存范围等信息。
+
+[RELY]
+可以使用：
+- get_memory_base() / get_memory_size()
+- DRAM_BASE、KERNEL_BEGIN_PADDR、PHYSICAL_MEMORY_OFFSET
+- PPN()、PADDR()、ROUNDUP()、PGSIZE
+- pages、npage、nbase、va_pa_offset
+- pa2page()、init_memmap()
+- SetPageReserved()、PageReserved()
+
+[CONSTRAINTS]
+- 不要修改 alloc_pages/free_pages 的封装逻辑；
+- 不要修改 basic_check/best_fit_check；
+- 必须处理空内存、内存范围溢出、页描述符数组越界等边界；
+- 不要使用硬编码的物理内存大小，必须以 DTB 信息为准。
+
+[TEST]
+测试函数 test_page_init() 会检查：
+- va_pa_offset 是否正确；
+- DTB 内存范围是否非 0；
+- npage 是否等于 PPN(mem_end)；
+- pages 是否非空、页对齐且位于内核 end 之后；
+- 空闲页数量是否合理；
+- 内核尾部页和 pages 数组页是否保持 Reserved；
+- page2pa/pa2page 是否可往返转换。
+
+[OUTPUT]
+只输出对 kern/mm/pmm.c 的完整修改，不要省略错误处理。
 ```
 
-#### 实现迭代过程
+### 实现迭代过程
 
-本模块的实现经历了 [N] 次迭代，过程如下：
+本模块的实现经历了 **2 次迭代**，过程如下：
 
 ---
 
-##### 第一次迭代
-
-如果设计的prompt生成代码后出现问题：
+#### 第一次迭代
 
 **遇到的问题：**
 
-- 问题1：问题描述、错误信息和原因分析
-- 问题2：问题描述、错误信息和原因分析
+- 问题 1：初版提示词只强调“初始化物理页”，生成代码直接使用固定内存范围，没有以 DTB 的 `get_memory_base()` / `get_memory_size()` 为准，导致 `npage` 和实际物理内存不一致。
+- 问题 2：没有明确区分“内核结束地址”和“页描述符数组结束地址”，存在把 `pages` 数组所在页错误登记为空闲页的风险。
+- 问题 3：没有强调内核镜像、OpenSBI 和 `pages` 数组必须保持 `PageReserved`，Test 1 的保留页检查无法保证通过。
 
 **问题解决策略：**
 
-- 针对问题1：[说明如何修改提示词]
-- 针对问题2：[说明如何修改提示词]
+- 针对问题 1：在 `[SPECIFICATION]` 中明确要求从 DTB 获取内存范围，并计算 `mem_end`、`npage`、`free_start_pa`。
+- 针对问题 2：在 `[SPECIFICATION]` 中分别定义 `pages_va`、`pages_end_va`、`pages_end_pa`，明确第一个空闲页从 `pages_end_pa` 开始。
+- 针对问题 3：在 `[RELY]` 和 `[TEST]` 中补充 `PageReserved`、内核尾部页、`pages` 数组页的检查要求。
 
-如果没有问题：
+---
+
+#### 第二次迭代
+
+第二次提示词明确加入了：
+
+- DTB 内存范围校验；
+- `pages` 数组的位置和大小计算；
+- 内核、OpenSBI、页描述符数组的保留策略；
+- 空闲页起始地址的计算方法；
+- `page2pa` / `pa2page` 往返检查。
 
 **最终结果：**
 
-经过 [N] 次迭代，该模块最终：
+经过 **2 次迭代**，该模块最终：
 
-- ✅ 编译通过
-- ✅ 所有相关测试通过
-- ✅ 功能符合预期
+- ✅ 编译通过；
+- ✅ `[Test 1] Page Init: PASS`；
+- ✅ 后续 `best_fit_check()` 和 SLUB 都能正常使用页分配器。
 
-**关键改进点总结（如有）：**
+**关键改进点总结：**
 
-1. [改进点1：例如，在 [RELY] 中补充了完整的系统调用号定义]
-2. [改进点2：例如，在 [SPECIFICATION] 中明确了异常处理的边界条件]
-3. [改进点3：例如，增加了对用户指针合法性检查的要求]
-
----
-
-##### 第二次迭代（如有）
-
-[按照和第一次迭代相同的格式]
+1. 在 `[SPECIFICATION]` 中补充了**物理内存范围校验和溢出检查**；
+2. 在 `[RELY]` 中明确列出 `PPN`、`PADDR`、`ROUNDUP`、`pa2page` 等依赖；
+3. 在 `[TEST]` 中把 `va_pa_offset`、`npage`、`pages` 对齐、保留页、地址往返转换全部写成可验证条件。
 
 ---
 
-##### 第三次迭代（如有）
+## 模块二：Best-Fit 页分配器
 
-[按照和第一次迭代相同的格式]
+负责人：`2411189-李梓宸`
+
+### 模块功能描述
+
+**需要实现/修改的函数：**
+
+```c
+static void best_fit_init(void);
+
+static void best_fit_init_memmap(struct Page *base, size_t n);
+
+static struct Page *best_fit_alloc_pages(size_t n);
+
+static void best_fit_free_pages(struct Page *base, size_t n);
+
+static size_t best_fit_nr_free_pages(void);
+
+/* 框架测试函数，本次未修改 */
+static void basic_check(void);
+static void best_fit_check(void);
+
+/* 页分配器注册对象 */
+const struct pmm_manager best_fit_pmm_manager;
+```
+
+**功能说明：**
+
+1. **在系统中的作用**
+
+   Best-Fit 负责管理所有空闲物理页。所有空闲块按物理页地址顺序挂在 `free_area.free_list` 上，每个空闲块的头页通过 `property` 记录块大小。
+
+2. **需要处理的主要场景**
+
+   - 初始化空闲链表；
+   - 将一段连续空闲内存登记为若干空闲块；
+   - 分配时扫描所有空闲块，选择**容量最小且满足 `property >= n`** 的块；
+   - 如果块比请求大，则从块首分配 `n` 页，剩余部分形成新的空闲块；
+   - 释放时按地址顺序插入空闲链表；
+   - 释放后与前后相邻空闲块合并；
+   - 维护 `nr_free` 总量，保证 `sum(property) == nr_free_pages()`。
+
+3. **与其他模块的交互关系**
+
+   ```text
+   pmm_manager
+      ↓
+   best_fit_pmm_manager
+      ↓
+   best_fit_alloc_pages() / best_fit_free_pages()
+      ↓
+   struct Page.property、page_link、flags
+      ↓
+   SLUB 通过 alloc_pages() 申请 slab 页
+   ```
+
+4. **Best-Fit 的关键选择逻辑**
+
+   测试中有如下场景：
+
+   ```text
+   空闲块： [p0+1, 2页]  [p0+4, 1页]
+   ```
+
+   此时请求 1 页，Best-Fit 必须选择 `p0+4` 的 1 页块，而不是地址更靠前的 2 页块，因此测试要求：
+
+   ```c
+   assert((p1 = alloc_pages(1)) != NULL);
+   assert(alloc_pages(2) != NULL);
+   assert(p0 + 4 == p1);
+   ```
+
+### 最终提示词
+
+```text
+[ROLE]
+你是一名 uCore 内核开发者。请在 kern/mm/best_fit_pmm.c 中实现 Best-Fit 物理页分配器。
+
+[CONTEXT]
+已有 free_area_t、free_list、nr_free、struct Page、page_link、property、flags 等基础设施。
+struct Page 的头页用 property 表示空闲块包含的页数，PageProperty(page) 表示该页是否是
+一个空闲块的头页。空闲链表必须按物理页地址升序排列。
+
+[SPECIFICATION]
+请实现以下函数：
+
+1. best_fit_init()
+   - 初始化 free_list；
+   - nr_free = 0。
+
+2. best_fit_init_memmap(struct Page *base, size_t n)
+   - 断言 n > 0；
+   - 对 [base, base+n) 中每一页断言 PageReserved(p)；
+   - 清除 flags、property，设置 ref=0；
+   - 将 base 作为空闲块头页，property=n，SetPageProperty(base)；
+   - 按物理地址顺序插入 free_list；
+   - nr_free += n。
+
+3. best_fit_alloc_pages(size_t n)
+   - 断言 n > 0；
+   - 如果 n > nr_free，返回 NULL；
+   - 遍历整个 free_list，选择 property >= n 且 property 最小的块；
+   - 如果没有合适块，返回 NULL；
+   - 从链表中删除选中块；
+   - 如果块大于 n，将 page+n 开始的剩余部分作为新空闲块，property = 原大小 - n，
+     按地址顺序插回原位置之后；
+   - nr_free -= n；
+   - 清除分配块头页的 PageProperty，property=0，flags=0，ref=0；
+   - 返回分配块的头页。
+
+4. best_fit_free_pages(struct Page *base, size_t n)
+   - 断言 n > 0；
+   - 对 [base, base+n) 中每一页断言 !PageReserved(p) 且 !PageProperty(p)；
+   - 清除 flags，设置 ref=0；
+   - 设置 base->property=n，SetPageProperty(base)；
+   - nr_free += n；
+   - 按物理地址顺序插入 free_list；
+   - 尝试与前一个空闲块合并：若 p + p->property == base，则合并；
+   - 尝试与后一个空闲块合并：若 base + base->property == p，则合并；
+   - 合并时必须正确清除被合并块头页的 PageProperty 并从链表删除。
+
+5. best_fit_nr_free_pages()
+   - 返回 nr_free。
+
+[RELY]
+可以使用：
+- struct Page、page_link、property、flags、ref
+- PageProperty()、SetPageProperty()、ClearPageProperty()
+- PageReserved()
+- list_init、list_empty、list_next、list_prev、list_add、list_add_before、list_del
+- le2page()
+- assert()
+- nr_free_pages()
+
+[CONSTRAINTS]
+- 不要修改 basic_check() 和 best_fit_check()；
+- 空闲链表必须保持物理地址升序；
+- 分配必须选择“最小满足块”，不能退化成 first-fit；
+- 释放后必须同时尝试向前和向后合并；
+- 注意维护 nr_free，不能只修改链表不修改计数；
+- 不要引入额外的页分配层级。
+
+[TEST]
+best_fit_check() 会检查：
+- sum(property) 是否等于 nr_free_pages()；
+- 基本 alloc/free 是否正确；
+- 空闲块不足时 alloc 是否返回 NULL；
+- 释放 p0+1 的 2 页和 p0+4 的 1 页后，alloc_pages(1) 是否返回 p0+4；
+- alloc_pages(2) 是否成功；
+- 释放 p0 开始 5 页后能否重新分配 5 页；
+- 释放后 nr_free 和空闲块总页数是否恢复。
+
+[OUTPUT]
+输出 best_fit_pmm.c 的完整实现，保持现有框架和测试函数不变。
+```
+
+### 实现迭代过程
+
+本模块的实现经历了 **3 次迭代**，过程如下：
+
+---
+
+#### 第一次迭代
+
+**遇到的问题：**
+
+- 问题 1：初版提示词只写了“实现 Best-Fit”，生成代码实际按链表顺序选择第一个满足条件的块，效果接近 First-Fit；
+- 问题 2：分配时没有正确拆分剩余空闲块，导致 `property` 和 `nr_free` 不一致；
+- 问题 3：释放时只插入了链表，没有与前后空闲块合并，`best_fit_check()` 中关于连续内存恢复的断言失败。
+
+**问题解决策略：**
+
+- 针对问题 1：在 `[SPECIFICATION]` 中明确写出“遍历全部空闲块，选择 `property >= n` 且 `property` 最小的块”。
+- 针对问题 2：补充“从 `page+n` 开始拆分剩余部分，并插回原块位置之后”的规则。
+- 针对问题 3：补充向前合并和向后合并两个条件，并要求同步维护 `nr_free`。
+
+---
+
+#### 第二次迭代
+
+第二次生成代码后，分配路径基本正确，但仍存在：
+
+- 问题 1：释放块插入位置不正确，破坏了空闲链表的地址顺序；
+- 问题 2：向前合并后，`base` 指针没有更新为前一个块，导致后续向后合并判断错误；
+- 问题 3：清除 `PageProperty` 的位置不完整，测试中的 `PageProperty` 断言失败。
+
+**问题解决策略：**
+
+- 在 `[SPECIFICATION]` 中明确要求“空闲链表按物理地址升序”；
+- 在 `[RELY]` 中列出 `list_add_before`、`list_prev`、`list_next`、`list_del` 的正确使用方式；
+- 在 `[TEST]` 中增加“释放后 `sum(property)` 必须等于 `nr_free`”的约束。
+
+---
+
+#### 第三次迭代
+
+第三次迭代后，Best-Fit 算法和测试均通过。随后发现测试环境问题：
+
+- `best_fit_check()` 本身通过，但 `make grade` 一度显示 0 分；
+- 原因是本机 QEMU/OpenSBI 对 `tools/grade.sh` 中的 `-device loader,...,addr=0x80200000` 启动方式不兼容；
+- 将评分脚本改为：
+
+```bash
+-kernel $osimg
+```
+
+之后 `make grade` 正常得到：
+
+```text
+-check page init:                          OK
+-check best fit:                           OK
+Total Score: 20/20
+```
+
+**最终结果：**
+
+经过 **3 次迭代**，该模块最终：
+
+- ✅ 编译通过；
+- ✅ `best_fit_check() succeeded!`；
+- ✅ `[Test 1] Page Init: PASS`；
+- ✅ `[Test 2] Best-Fit: PASS`；
+- ✅ `make grade`：**20/20**。
+
+**关键改进点总结：**
+
+1. 在 `[SPECIFICATION]` 中把“Best-Fit”细化成**最小满足块选择、拆分、双向合并、地址有序**四个可验证条件；
+2. 在 `[RELY]` 中补充 `PageProperty`、`list_prev`、`list_add_before` 等链表和页标志接口；
+3. 在 `[TEST]` 中显式写出 `p0+4 == p1` 的最小适配测试场景，避免模型生成 First-Fit。
+
+---
+
+## 模块三：Buddy System 页分配器
+
+负责人：`2411189-李梓宸`
+
+### 模块功能描述
+
+**需要实现/修改的函数：**
+
+```c
+static unsigned int buddy_order(size_t n);
+
+static struct Page *buddy_of(struct Page *page, unsigned int order);
+
+static void buddy_list_insert(struct Page *base, unsigned int order);
+
+static void buddy_add_free_block(struct Page *base, unsigned int order);
+
+static void buddy_remove_free_block(struct Page *base, unsigned int order);
+
+static void buddy_insert_and_merge(struct Page *base, unsigned int order);
+
+static void buddy_init(void);
+
+static void buddy_init_memmap(struct Page *base, size_t n);
+
+static struct Page *buddy_alloc_pages(size_t n);
+
+static void buddy_free_pages(struct Page *base, size_t n);
+
+static size_t buddy_nr_free_pages(void);
+
+static void buddy_check_lists(void);
+
+static void buddy_check(void);
+
+const struct pmm_manager buddy_pmm_manager;
+```
+
+**功能说明：**
+
+1. **在系统中的作用**
+
+   Buddy System 按 2 的幂次管理空闲页。`MAX_ORDER = 20`，`free_area[k]` 管理所有大小为 `2^k` 页的空闲块。分配时向上取整到合适的 order，找不到时向更高 order 查找并逐层拆分；释放时与空闲的 buddy 反复合并。
+
+2. **需要处理的主要场景**
+
+   - 初始化 `MAX_ORDER` 个空闲链表；
+   - 将初始物理内存拆成自然对齐的 2 的幂次块；
+   - 请求页数不是 2 的幂时向上取整；
+   - 从更高 order 的块中拆分；
+   - 释放时与 buddy 合并；
+   - 处理超出最大 order 或空闲内存不足的请求；
+   - 维护每个 order 的空闲块数量和总空闲页数；
+   - 检查空闲块的地址对齐、`property` 和链表一致性。
+
+3. **与其他模块的交互关系**
+
+   ```text
+   page_init()
+      ↓
+   buddy_init_memmap()
+      ↓
+   free_area[0..MAX_ORDER-1]
+      ↓
+   buddy_alloc_pages() / buddy_free_pages()
+      ↓
+   SLUB 的 slab 页分配
+   ```
+
+4. **核心不变量**
+
+   - order 为 `k` 的空闲块包含 `2^k` 页；
+   - 空闲块起始物理页号必须按 `2^k` 对齐；
+   - `buddy_of(page, k)` 的页号为：
+
+     ```c
+     ppn ^ (1 << k)
+     ```
+
+   - 每个空闲块头页满足 `PageProperty(page)`；
+   - 每个 order 的 `nr_free` 等于该链表中的块数；
+   - 所有 order 的 `nr_free` 总和等于 `buddy_nr_free_pages()`。
+
+### 最终提示词
+
+```text
+[ROLE]
+你是一名 uCore 内核开发者。请在 kern/mm/buddy_pmm.c 中实现 Buddy System 物理页分配器。
+
+[CONTEXT]
+已有 struct Page、page_link、property、flags、PageProperty()、nbase、npage、pages、
+page2ppn() 等基础设施。MAX_ORDER 定义为 20，order k 管理 2^k 页的空闲块。
+Buddy 分配器通过 struct pmm_manager 注册为 buddy_pmm_manager。
+
+[SPECIFICATION]
+请实现：
+
+1. buddy_order(size_t n)
+   - 返回能容纳 n 页的最小 order；
+   - 如果 n 超过最大可管理块，返回 MAX_ORDER。
+
+2. buddy_of(struct Page *page, unsigned int order)
+   - 计算 page 的物理页号 ppn；
+   - buddy_ppn = ppn ^ (1 << order)；
+   - 如果 buddy_ppn 不在 [nbase, npage) 范围内，返回 NULL；
+   - 否则返回 &pages[buddy_ppn - nbase]。
+
+3. buddy_list_insert / buddy_add_free_block / buddy_remove_free_block
+   - 每个 order 使用独立空闲链表；
+   - 插入时保持物理地址升序；
+   - 添加空闲块时设置 property=2^order、SetPageProperty、ref=0；
+   - 删除空闲块时 ClearPageProperty、property=0，并更新该 order 的 nr_free；
+   - 所有操作必须同步维护全局 nr_free。
+
+4. buddy_insert_and_merge(struct Page *base, unsigned int order)
+   - 将 base 作为 2^order 页的空闲块；
+   - 当 order+1 < MAX_ORDER 时，检查其 buddy 是否为空闲块且大小相同；
+   - 如果 buddy 可合并，从空闲链表删除 buddy；
+   - 取两者中地址较小的作为新的 base；
+   - order++，size 翻倍，继续尝试合并；
+   - 最后将合并后的块加入对应 order 的空闲链表。
+
+5. buddy_init()
+   - 初始化所有 order 的空闲链表和 nr_free；
+   - 全局 nr_free = 0。
+
+6. buddy_init_memmap(struct Page *base, size_t n)
+   - 断言 n > 0；
+   - 对 [base, base+n) 中每一页断言 PageReserved；
+   - 清除 flags/property，设置 ref=0；
+   - 将区域拆成自然对齐的 2 的幂次块；
+   - 每个块调用 buddy_insert_and_merge()。
+
+7. buddy_alloc_pages(size_t n)
+   - 断言 n > 0；
+   - 计算请求 order；
+   - 从该 order 向上寻找第一个非空链表；
+   - 如果找不到，返回 NULL；
+   - 从找到的块中取出一个块；
+   - 逐层拆分，把每次拆分出的高半部分作为低一阶空闲块加入链表；
+   - 清除最终分配块头页的 PageProperty、property、flags；
+   - 返回分配块头页。
+
+8. buddy_free_pages(struct Page *base, size_t n)
+   - 断言 n > 0；
+   - 计算 order 和实际释放页数 2^order；
+   - 对释放范围内每一页断言 !PageReserved 且 !PageProperty；
+   - 清除 flags/property，设置 ref=0；
+   - 调用 buddy_insert_and_merge() 执行合并。
+
+9. buddy_nr_free_pages()
+   - 返回全局 nr_free。
+
+10. buddy_check_lists()
+   - 遍历所有 order 的链表；
+   - 检查每个块 PageProperty、非 Reserved、ref=0；
+   - 检查 property == 2^order；
+   - 检查起始页号按 2^order 对齐；
+   - 检查块范围位于 [nbase, npage)；
+   - 检查每个 order 的块数等于 nr_free；
+   - 检查所有块页数总和等于全局 nr_free。
+
+[RELY]
+可以使用：
+- struct Page、page_link、property、flags、ref
+- PageProperty()、SetPageProperty()、ClearPageProperty()
+- PageReserved()
+- page2ppn()、nbase、npage、pages
+- list_init、list_empty、list_next、list_add_before、list_del
+- le2page()
+- assert()
+
+[CONSTRAINTS]
+- 不要修改页分配器框架和 pmm_manager 接口；
+- 每个 order 的链表必须按物理地址升序；
+- 拆分时必须把高半部分加入低一阶链表；
+- 合并时必须只与“同 order 且空闲”的 buddy 合并；
+- 必须处理超出 MAX_ORDER 和空闲内存不足的情况；
+- 注意维护每个 order 的 nr_free 和全局 nr_free。
+
+[TEST]
+buddy_check() 会检查：
+- 基本 1 页 alloc/free；
+- alloc_pages(3) 必须实际占用 4 页，且返回页号按 4 页对齐；
+- 清空所有 order-0 空闲块后，alloc_pages(1) 必须能触发大块拆分；
+- 两次相互 buddy 的 1 页分配释放后必须合并，order-0 链表应重新为空；
+- 申请超过当前空闲页数必须返回 NULL，且 nr_free 不变；
+- 所有 order 的链表、property、对齐和总页数必须满足不变量。
+
+[OUTPUT]
+输出 buddy_pmm.c 的完整实现，并注册 buddy_pmm_manager。
+```
+
+### 实现迭代过程
+
+本模块的实现经历了 **3 次迭代**，过程如下：
+
+---
+
+#### 第一次迭代
+
+**遇到的问题：**
+
+- 问题 1：初版提示词没有明确“order k 的块必须按 2^k 页对齐”，生成代码直接按请求页数切分，`alloc_pages(3)` 没有按 4 页对齐；
+- 问题 2：分配时只从当前 order 取块，没有向更高 order 查找并拆分；
+- 问题 3：释放时只把块插回链表，没有与 buddy 合并。
+
+**问题解决策略：**
+
+- 针对问题 1：在 `[SPECIFICATION]` 中明确 `order k`、`2^k` 页、起始页号按 `2^k` 对齐；
+- 针对问题 2：补充“从请求 order 向上查找第一个非空链表，再逐层拆分”的流程；
+- 针对问题 3：补充 `buddy_of()` 的 XOR 计算公式和 `buddy_insert_and_merge()` 的循环合并逻辑。
+
+---
+
+#### 第二次迭代
+
+第二次生成代码可以进行基本分配，但仍有问题：
+
+- 问题 1：拆分时把低半部分加入了空闲链表，应该保留低半部分作为当前分配块，把高半部分作为新的空闲块；
+- 问题 2：合并时没有检查 buddy 的 `property` 是否等于当前块大小，可能把不同大小的块错误合并；
+- 问题 3：`nr_free` 在拆分和合并过程中被重复加减。
+
+**问题解决策略：**
+
+- 在 `[SPECIFICATION]` 中明确“每次拆分出的高半部分加入低一阶空闲链表”；
+- 在合并条件中加入 `buddy->property == size`；
+- 在 `[CONSTRAINTS]` 中要求每个 order 的 `nr_free` 与链表块数同步维护。
+
+---
+
+#### 第三次迭代
+
+第三次生成代码后：
+
+- `buddy_order()` 正确向上取整；
+- `buddy_of()` 正确使用 `ppn ^ (1 << order)`；
+- `alloc_pages(3)` 占用 4 页且地址按 4 页对齐；
+- 两次 order-0 分配释放后能够合并到更高 order；
+- `buddy_check_lists()` 的链表、对齐、范围和总页数检查全部通过。
+
+**最终结果：**
+
+经过 **3 次迭代**，该模块最终：
+
+- ✅ 编译通过；
+- ✅ `[buddy_check] basic alloc/free: passed`
+- ✅ `[buddy_check] order alignment (3 -> 4 pages): passed`
+- ✅ `[buddy_check] block split: passed`
+- ✅ `[buddy_check] buddy merge: passed`
+- ✅ `[buddy_check] out-of-memory request: passed`
+- ✅ `buddy_check() succeeded!`
+- ✅ `check_alloc_page() succeeded!`
+
+**关键改进点总结：**
+
+1. 在 `[SPECIFICATION]` 中补充了 **order、2^k 页、物理页号对齐** 的精确定义；
+2. 在 `[RELY]` 中列出 `page2ppn()`、`nbase`、`npage`，避免生成代码越界访问；
+3. 在 `[TEST]` 中增加 OOM、拆分、合并、对齐和链表一致性检查。
+
+---
+
+## 模块四：SLUB 对象分配器
+
+负责人：`2411189-李梓宸`
+
+### 模块功能描述
+
+**需要实现/修改的函数：**
+
+```c
+/* 对外接口 */
+void slub_init(void);
+void *slub_alloc(size_t size);
+void slub_free(void *ptr);
+void slub_check(void);
+
+/* 内部辅助函数 */
+static struct kmem_cache *slub_cache_for(size_t size);
+
+static inline void *slub_page_kva(struct Page *page);
+
+static inline bool slub_bit_test(const uint8_t *bitmap, size_t index);
+static inline void slub_bit_set(uint8_t *bitmap, size_t index);
+static inline void slub_bit_clear(uint8_t *bitmap, size_t index);
+
+static struct slub_slab *slub_slab_of(struct kmem_cache *cache, void *obj);
+
+static struct slub_slab *slub_grow(struct kmem_cache *cache);
+
+static bool slub_locate(void *ptr,
+                        struct kmem_cache **cache_out,
+                        struct slub_slab **slab_out,
+                        size_t *index_out);
+
+static void *slub_alloc_large(size_t size);
+static bool slub_free_large(void *ptr);
+
+static void slub_purge_slab(struct kmem_cache *cache,
+                            struct slub_slab *slab);
+
+static void slub_evict_slab(struct kmem_cache *cache,
+                            struct slub_slab *slab);
+
+static bool slub_check_overlap(void *a, size_t a_size,
+                               void *b, size_t b_size);
+```
+
+**功能说明：**
+
+1. **在系统中的作用**
+
+   SLUB 是建立在物理页分配器之上的第二层对象分配器：
+
+   ```text
+   第一层：Best-Fit / Buddy 管理物理页
+   第二层：SLUB 管理小对象和任意大小对象
+   ```
+
+   小对象通过固定大小缓存分配，减少内部碎片和页分配次数；大对象直接通过页分配器分配连续页。
+
+2. **需要处理的主要场景**
+
+   - 8、16、32、64、128、256 字节小对象缓存；
+   - 每个 slab 占一页，页首放元数据；
+   - 对象按自身大小对齐；
+   - 空闲对象使用侵入式单链表连接；
+   - slab 用尽时调用 `alloc_pages(1)` 扩展；
+   - 整个 slab 全空时归还页分配器；
+   - 对象释放后优先复用；
+   - `size == 0` 返回 `NULL`；
+   - 大于 256 字节的对象走大对象路径；
+   - 大对象使用连续多页，并在页首保存元数据；
+   - 非法指针、重复释放需要拒绝或警告。
+
+3. **与其他模块的交互关系**
+
+   ```text
+   pmm_init()
+      ↓
+   page_init()
+      ↓
+   Best-Fit / Buddy
+      ↓
+   alloc_pages() / free_pages()
+      ↓
+   SLUB slab / large object
+      ↓
+   slub_alloc() / slub_free()
+   ```
+
+   `kern_init()` 在 `pmm_init()` 之后调用 `slub_check()`：
+
+   ```c
+   pmm_init();
+   slub_check();
+   ```
+
+### 最终提示词
+
+```text
+[ROLE]
+你是一名 uCore 内核开发者。请实现基于页分配器的两层 SLUB 对象分配器。
+
+[CONTEXT]
+第一层已经提供 alloc_pages(n)/free_pages(page,n)，由 Best-Fit 或 Buddy 实现。
+第二层需要提供 slub_alloc(size_t)/slub_free(void *)。项目运行在 RISC-V 上，
+PGSIZE=4096，内核虚拟地址与物理地址之间使用 va_pa_offset 映射。
+已有 list_entry_t、list_init、list_add、list_del、le2struct/to_struct 等链表设施。
+
+[SPECIFICATION]
+请实现以下内容：
+
+一、固定大小缓存
+1. 支持 8、16、32、64、128、256 字节 6 个缓存；
+2. 请求大小向上取整到最小的足够大的缓存；
+3. size == 0 返回 NULL；
+4. 超过 256 字节的请求进入大对象路径，不能直接返回 NULL。
+
+二、slab 结构
+1. 每个 slab 占一个物理页；
+2. 页首存放 struct slub_slab 元数据；
+3. 对象区从 ROUNDUP(sizeof(struct slub_slab), object_size) 开始；
+4. 每个对象按 object_size 对齐；
+5. 每个 slab 维护 objects_per_slab、nr_free、state 位图；
+6. state 位图中 1 表示已分配，0 表示空闲；
+7. 所有 slab 通过 slab_link 挂在 kmem_cache.slab_list 上。
+
+三、空闲对象链表
+1. 使用侵入式单链表，空闲对象的第一个机器字保存下一个空闲对象地址；
+2. 该方案必须兼容 8 字节对象；
+3. cache 维护 free_list、nr_free、nr_total、nr_slabs。
+
+四、slub_grow()
+1. 调用 alloc_pages(1) 获取一个新页；
+2. 初始化 slab 元数据；
+3. 将页内所有对象串成空闲链表；
+4. 把新 slab 加到 cache->slab_list；
+5. 更新 cache->free_list、nr_free、nr_total、nr_slabs。
+
+五、slub_alloc()
+1. 懒初始化所有 cache；
+2. 找到合适的 cache；
+3. 如果 cache->free_list 为空，调用 slub_grow()；
+4. 从 free_list 取出一个对象；
+5. 通过 slab 范围和 object_size 计算对象下标；
+6. 校验对象对齐、未分配、slab 有剩余空间；
+7. 设置 state 位，减少 cache 和 slab 的 nr_free；
+8. 返回对象地址。
+
+六、slub_free()
+1. ptr == NULL 直接返回；
+2. 通过 slab 范围定位所属 cache、slab 和对象下标；
+3. 如果指针不在任何 slab 中，尝试大对象链表；
+4. 重复释放必须检测 state 位并警告；
+5. 清除 state 位，把对象头插入 cache->free_list；
+6. 增加 cache 和 slab 的 nr_free；
+7. 如果 slab 全部空闲，调用 slub_evict_slab()：
+   - 从 cache 空闲链表中删除该 slab 的所有对象；
+   - 从 slab_list 删除；
+   - 更新 cache 计数；
+   - free_pages(slab->page, 1)。
+
+七、大对象路径
+1. 超过最大缓存的请求使用 alloc_pages(n) 分配连续页；
+2. 在页首放 struct slub_large，记录 next、page、nr_pages、size、magic；
+3. 返回 header 之后的 payload；
+4. slub_free() 必须能在大对象链表中找到并 free_pages()；
+5. 必须支持 300 字节和 PGSIZE 字节的多页对象；
+6. 分配和释放前后 nr_free_pages() 必须恢复。
+
+八、slub_check()
+实现自测，覆盖：
+- 不同大小对象分配且不重叠；
+- 对象按缓存大小对齐；
+- 一个 slab 不够时扩展第二个页；
+- 批量释放后页回收；
+- 释放对象优先复用；
+- size == 0；
+- 300 字节大对象；
+- 4096 字节多页对象；
+- 所有测试结束后页数恢复。
+
+[RELY]
+可以使用：
+- alloc_pages(n)、free_pages(page,n)、nr_free_pages()
+- page2pa()、va_pa_offset、struct Page
+- ROUNDUP、PGSIZE、memset
+- list_init、list_add、list_del、list_next、list_entry
+- to_struct/le2slab
+- assert、panic、warn、cprintf
+
+[CONSTRAINTS]
+- 不要绕过页分配器直接使用物理地址；
+- 不要修改 pmm_manager 的 Best-Fit/Buddy 实现；
+- 必须处理 size == 0、未知指针、重复释放；
+- 小对象不能越界到相邻对象；
+- slab 元数据不能与对象区重叠；
+- 大对象不能与 slab 对象冲突；
+- 释放时必须恢复页计数。
+
+[TEST]
+slub_check() 预期输出：
+  [slub_check] size classes/non-overlap: passed
+  [slub_check] slab growth: used 2 page(s): passed
+  [slub_check] bulk free/page reclaim: passed
+  [slub_check] free-list reuse: passed
+  [slub_check] size == 0: handled (NULL)
+  [slub_check] large-object fallback (300 bytes): passed
+  [slub_check] multi-page object (4096 bytes): passed
+  slub_check() succeeded!
+
+[OUTPUT]
+输出 slub.c 和 slub.h 的完整实现，并在 kern_init() 中 pmm_init() 之后调用 slub_check()。
+```
+
+### 实现迭代过程
+
+本模块的实现经历了 **3 次迭代**，过程如下：
+
+---
+
+#### 第一次迭代
+
+**遇到的问题：**
+
+- 问题 1：初版提示词只要求“实现 SLUB”，生成代码把请求直接四舍五入到页，没有真正实现 slab 缓存；
+- 问题 2：没有实现空闲对象链表，分配和释放只能整页进行；
+- 问题 3：没有 slab 回收逻辑，批量释放后页数不能恢复。
+
+**问题解决策略：**
+
+- 在 `[SPECIFICATION]` 中明确“两层架构”和“slab 页 + 对象区”的结构；
+- 补充 `slub_grow()`、`slub_alloc()`、`slub_free()` 的完整流程；
+- 在 `[TEST]` 中加入“批量释放后页数恢复”和“对象复用”检查。
+
+---
+
+#### 第二次迭代
+
+第二次生成代码能够完成小对象分配，但仍有问题：
+
+- 问题 1：slab 元数据区与第一个对象重叠，8 字节对象被破坏；
+- 问题 2：空闲对象链表使用完整 `list_entry_t`，8 字节对象放不下；
+- 问题 3：slab 全部空闲后没有从 cache 中删除，导致页不能归还。
+
+**问题解决策略：**
+
+- 在 `[SPECIFICATION]` 中明确 `offset = ROUNDUP(sizeof(struct slub_slab), object_size)`；
+- 要求空闲对象第一个机器字保存 next 指针，使用侵入式单链表；
+- 补充 `slub_purge_slab()` 和 `slub_evict_slab()` 的回收流程。
+
+---
+
+#### 第三次迭代
+
+第二次实现通过了 8/16/32/64/128/256 字节缓存测试，但发现：
+
+- 问题 1：`slub_alloc(300)`、`slub_alloc(4096)` 等大于 256 字节的请求返回 `NULL`，不满足 Challenge 中“任意大小”的要求；
+- 问题 2：没有针对大对象的测试，报告无法证明任意大小分配能力。
+
+**问题解决策略：**
+
+- 在 `[SPECIFICATION]` 中增加“大对象路径”；
+- 使用 `alloc_pages(n)` 分配连续页；
+- 在页首放 `struct slub_large`，记录 `next`、`page`、`nr_pages`、`size`、`magic`；
+- `slub_free()` 先查 slab，再查大对象链表；
+- 在 `[TEST]` 中增加 300 字节和 4096 字节对象测试，并检查 `nr_free_pages()` 恢复。
+
+**最终结果：**
+
+经过 **3 次迭代**，该模块最终：
+
+- ✅ 编译通过；
+- ✅ `slub_check()` 全部通过；
+- ✅ Best-Fit 和 Buddy 两种页分配器下均通过；
+- ✅ 8–256B 小对象走 slab；
+- ✅ 300B、4096B 大对象走页级分配；
+- ✅ 批量释放后页数恢复。
+
+实测输出：
+
+```text
+  [slub_check] size classes/non-overlap: passed
+  [slub_check] slab growth: used 2 page(s): passed
+  [slub_check] bulk free/page reclaim: passed
+  [slub_check] free-list reuse: passed
+  [slub_check] size == 0: handled (NULL)
+  [slub_check] large-object fallback (300 bytes): passed
+  [slub_check] multi-page object (4096 bytes): passed
+slub_check() succeeded!
+```
+
+**关键改进点总结：**
+
+1. 在 `[SPECIFICATION]` 中补充了 **slab 元数据布局、对象偏移、位图状态、页回收**；
+2. 在 `[RELY]` 中明确 `alloc_pages/free_pages`、`page2pa`、`va_pa_offset`、链表接口；
+3. 在 `[TEST]` 中增加大对象和多页对象测试，弥补了初版只测小对象的不足；
+4. 在 `[CONSTRAINTS]` 中明确禁止绕过页分配器直接使用物理地址。
 
 ---
 
