@@ -1,0 +1,57 @@
+Lab 3 学习与提示词记录
+日期：2026-11-06
+
+功能模块一：Trap 上下文恢复与入口
+
+Spec（功能要求）
+1. 在 kern/trap/trapentry.S 中，完善 RESTORE_ALL 和 __alltraps 中标记为 lab3 function1 YOUR CODE 的部分。
+2. __alltraps 在已有 SAVE_ALL 执行后，将当前 Trap frame 地址作为参数传给 trap(struct trapframe *tf)。trap 返回后继续进入已有的 __trapret。
+3. RESTORE_ALL 按照 SAVE_ALL 和 struct trapframe 的实际布局恢复通用寄存器，以及用于返回的 sstatus 和 sepc。处理函数可能修改 tf->epc，因此恢复时应使用 Trap frame 中当前保存的值。
+4. 恢复过程中保持 Trap frame 可访问，正确恢复原来的 sp；现有 sret 负责最终返回。
+5. 不修改 SAVE_ALL、struct trapframe 和 trap() 的函数签名，保留实验标记注释。
+
+Prompt（供生成代码使用，尚未执行）
+你是一名熟悉 RISC-V 特权架构与汇编的操作系统助教。请先阅读本项目的 kern/trap/trapentry.S、kern/trap/trap.h 和 kern/trap/trap.c，基于这些文件中现有的代码完成 Lab 3 功能模块一。
+
+任务：
+1. 在 trapentry.S 的 RESTORE_ALL 宏中，补全与已有 SAVE_ALL 相对应的现场恢复代码。
+2. 在 __alltraps 中 SAVE_ALL 之后的标记处，建立与 C 函数 void trap(struct trapframe *tf) 的调用关系，并在 trap 返回后继续执行已有的 __trapret。
+
+要求与约束：
+- 以现有 SAVE_ALL、REGBYTES 和 struct trapframe 为准确认各字段偏移，不能自行假设不同的布局。
+- 依据 RISC-V 调用约定传递 Trap frame 指针；确保 trap 返回后 sp 仍指向正确的 Trap frame。
+- 恢复原有通用寄存器以及用于 Trap 返回的 sstatus、sepc。考虑恢复 CSR 时使用的临时寄存器不能破坏最终恢复结果；x0 是常量寄存器。
+- 注意保存时 x2/sp 的特殊处理。恢复时在不再需要以当前 sp 访问 Trap frame 后，才恢复原来的 sp。
+- 不要把 cause 和 badvaddr 当作必须恢复的返回状态；不要覆盖处理函数对 Trap frame（例如 epc）的合法修改。
+- 不修改 SAVE_ALL、struct trapframe、trap() 的函数签名或现有 sret，保留 lab3 标记注释。仅针对本模块给出修改，不实现中断和异常处理函数。
+- 先给出建议的代码片段和逐步解释，说明各恢复偏移、临时寄存器、sp 恢复顺序以及如何与 __trapret 衔接；暂时不要直接修改文件。
+- 如果发现既有框架与当前工具链的兼容问题，请单独指出，不要在未说明的情况下修改框架。
+
+记录说明：这是根据学习过程整理的提示词草稿，尚未用于生成或测试代码。代码验证结果将在实际执行后补充。
+
+执行记录（2026-11-06）：用户要求根据上述提示词修改代码。已在 trapentry.S 补充模块一的入口调用和恢复代码。使用临时副本将旧 CSR 名称 sbadaddr 替换为 stval 后，汇编检查通过；项目原文件中的 SAVE_ALL 保持不变。完整构建和运行测试尚未通过：原文件仍有 CSR 名称兼容问题，模块二处理函数尚未实现。
+
+功能模块二：中断与异常处理
+
+Spec（功能要求）
+1. 在 kern/trap/trap.c 指定位置完成 interrupt_handler 和 exception_handler，不改变现有函数签名及其他规定以外的函数。
+2. 按 cause 区分中断类型；时钟中断设置下一次事件、每次递增 ticks、每 TICK_NUM 次输出统计信息，达到规定的输出次数后关机。其他已列中断输出类型，未知中断输出提示并打印 Trap frame。
+3. 对非法指令与断点异常输出实验要求的信息，根据指令实际长度调整 tf->epc；其他异常打印 Trap frame。
+4. 对照现有接口、测试程序及评分脚本检查行为和输出，不假设测试覆盖了所有边界情况。
+
+Prompt（供生成代码使用，尚未执行）
+你是一名熟悉 RISC-V 中断与异常处理的操作系统助教。请先阅读 kern/trap/trap.c、trap.h、kern/driver/clock.c、clock.h、libs/riscv.h、libs/sbi.h、tools/test_lab3.c 和 tools/grade.sh，再根据现有框架完成 Lab 3 功能模块二的代码建议。
+
+任务与约束：
+- 只在 trap.c 指定的 lab3 function2 区域实现 interrupt_handler(struct trapframe *tf) 和 exception_handler(struct trapframe *tf)，保持其他规定以外的函数不变，保留标记注释。
+- 处理中断时正确区分 cause 的中断标志和原因编号。时钟中断每次设置下一次时钟事件、递增 ticks，达到 TICK_NUM 的整数倍时调用已有统计输出，并依据规定次数关机；其他已列中断输出对应类型，未知类型输出提示并调用 print_trapframe(tf)。
+- 非法指令和断点异常按要求输出地址等信息，依据实际触发指令长度更新 tf->epc，确保返回后不重复执行已处理指令；其他异常调用 print_trapframe(tf)。说明读取指令和识别长度的前提，不要假设所有指令都是 4 字节。
+- 检查并遵守框架测试对输出文本的要求。不要将只通过现有测试等同于完整正确；说明尚未覆盖的情况。
+- 指导书提及 SHUTDOWN_AFTER，但当前框架未发现其定义；请明确指出该差异，不要声称它已定义。如必须选取具体值，请标记为待确认的假设，并确保测试需要的 200 次时钟中断不被提前终止。
+- 先给出代码建议和对 cause、指令长度、时钟重设、关机计数的解释，暂不直接修改文件；如果发现编译或框架兼容问题，单独说明。
+
+记录说明：模块二提示词为草稿，尚未用于生成或测试代码。
+
+执行记录（2026-11-06）：用户要求完成代码后，依据上述 spec 实现了模块二。SHUTDOWN_AFTER 暂定为 10 次统计输出；支持根据指令低两位区分 2 字节与 4 字节指令，假设异常指令地址在当前内核中可读。将旧 CSR 名 sbadaddr 改为 stval，并沿用 Lab 2 的 QEMU -kernel 启动方式及启动页表恒等映射。临时副本注入测试后，三组评分均通过，总分 100/100。评分测试未单独覆盖关机阈值、压缩异常指令和所有可能的异常场景。
+
+测试过程纠正：首次准备测试时因路径转义错误，测试脚本误注入原工程；已移除其添加的测试文件、初始化调用及 Makefile 条目，随后在独立副本重新运行测试。
